@@ -1,0 +1,286 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(flextable)
+library(officer)
+library(rlang)
+
+# =========================
+# 1. Read data
+# =========================
+df <- read.csv(
+  "/Users/zsayali1/Documents/2004 Analysis/MDDAUD-Antidepressants_DATA_Updated.csv",
+  stringsAsFactors = FALSE,
+  na.strings = c("", "NA", "N/A", ".", "--")
+)
+df <- df %>%
+  mutate(across(where(is.character), ~ trimws(.x))) %>%
+  mutate(across(where(is.character), ~ na_if(.x, "")))
+# =========================
+# 2. Recode / enforce types
+# =========================
+df <- df %>%
+  mutate(
+    Drug = factor(Drug, levels = c("Placebo", "Psilocybin")),
+
+    Gender = factor(Gender, levels = c("Male", "Female", "Transgender")),
+    Race = factor(Race, levels = c("White", "Black", "Asian", "Indian")),
+
+    Antidepressant = factor(Antidepressant, levels = c(0, 1), labels = c("No", "Yes")),
+    Hispanic = factor(Hispanic, levels = c(0, 1), labels = c("No", "Yes")),
+
+    Age = as.numeric(Age),
+    TLFB = as.numeric(TLFB),
+    GRID = as.numeric(GRID),
+    DrinksPerDay = as.numeric(DrinksPerDay),
+    DrinksPerHeavy = as.numeric(DrinksPerHeavy),
+    Abstinent = as.numeric(Abstinent)
+  )
+
+# =========================
+# 3. Helper functions
+# =========================
+fmt_n_pct <- function(n, d) {
+  ifelse(is.na(n) | n == 0, "--", sprintf("%d (%.1f%%)", n, 100 * n / d))
+}
+
+fmt_mean_sd <- function(x) {
+  sprintf("%.1f (%.1f)", mean(x, na.rm = TRUE), sd(x, na.rm = TRUE))
+}
+
+# =========================
+# 4. N per treatment group
+# =========================
+n_by_group <- df %>%
+  count(Drug, name = "N")
+
+# =========================
+# 5. Function to build categorical blocks
+# =========================
+make_cat_block <- function(data, var, levels_vec, row_labels, section_name, n_lookup) {
+  tmp <- expand_grid(
+    Drug = levels(data$Drug),
+    level = levels_vec
+  ) %>%
+    left_join(
+      data %>%
+        count(Drug, !!sym(var), name = "n") %>%
+        mutate(level = as.character(!!sym(var))) %>%
+        select(Drug, level, n),
+      by = c("Drug", "level")
+    ) %>%
+    left_join(n_lookup, by = "Drug") %>%
+    mutate(
+      n = replace_na(n, 0),
+      value = fmt_n_pct(n, N),
+      Variable = row_labels[match(level, levels_vec)]
+    ) %>%
+    select(Variable, Drug, value) %>%
+    pivot_wider(names_from = Drug, values_from = value)
+
+  header <- tibble(
+    Variable = section_name,
+    Placebo = "",
+    Psilocybin = ""
+  )
+
+  bind_rows(header, tmp)
+}
+
+# =========================
+# 6. Build categorical sections
+# =========================
+gender_block <- make_cat_block(
+  data = df,
+  var = "Gender",
+  levels_vec = c("Male", "Female", "Transgender"),
+  row_labels = c("    Male", "    Female", "    Transgender"),
+  section_name = "Gender",
+  n_lookup = n_by_group
+)
+
+race_block <- make_cat_block(
+  data = df,
+  var = "Race",
+  levels_vec = c("White", "Black", "Asian", "Indian"),
+  row_labels = c(
+    "    White or Caucasian",
+    "    Black or African American",
+    "    Asian",
+    "    American Indian"
+  ),
+  section_name = "Race",
+  n_lookup = n_by_group
+)
+
+# Ethnicity section: only show Hispanic row
+ethnicity_counts <- expand_grid(
+  Drug = levels(df$Drug),
+  Hispanic = "Yes"
+) %>%
+  left_join(
+    df %>% count(Drug, Hispanic, name = "n"),
+    by = c("Drug", "Hispanic")
+  ) %>%
+  left_join(n_by_group, by = "Drug") %>%
+  mutate(
+    n = replace_na(n, 0),
+    value = fmt_n_pct(n, N),
+    Variable = "    Hispanic"
+  ) %>%
+  select(Variable, Drug, value) %>%
+  pivot_wider(names_from = Drug, values_from = value)
+
+ethnicity_block <- bind_rows(
+  tibble(Variable = "Ethnicity", Placebo = "", Psilocybin = ""),
+  ethnicity_counts
+)
+
+antidepressant_block <- make_cat_block(
+  data = df,
+  var = "Antidepressant",
+  levels_vec = c("No", "Yes"),
+  row_labels = c("    No", "    Yes"),
+  section_name = "Maintained on Antidepressants",
+  n_lookup = n_by_group
+)
+
+# =========================
+# 7. N row
+# =========================
+n_row <- n_by_group %>%
+  transmute(Variable = "N", Drug, value = as.character(N)) %>%
+  pivot_wider(names_from = Drug, values_from = value)
+
+# =========================
+# 8. Continuous rows
+# =========================
+cont_rows <- df %>%
+  mutate(
+    pct_abstinent_90 = (Abstinent / 90) * 100,
+    pct_heavy_drinking_90 = (TLFB / 90) * 100
+  ) %>%
+  group_by(Drug) %>%
+  summarise(
+    `Age, mean (SD)` = fmt_mean_sd(Age),
+    `GRID-HAMD, mean (SD)` = fmt_mean_sd(GRID),
+    `% days abstinent of previous 90 days` = fmt_mean_sd(pct_abstinent_90),
+    `% heavy drinking days of previous 90 days` = fmt_mean_sd(pct_heavy_drinking_90),
+    `Average no. of drinks per regular (non-heavy) drinking day over last 90 days` = fmt_mean_sd(DrinksPerDay),
+    `Average no. of drinks per heavy drinking day over last 90 days` = fmt_mean_sd(DrinksPerHeavy),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(cols = -Drug, names_to = "Variable", values_to = "value") %>%
+  pivot_wider(names_from = Drug, values_from = value)
+
+# =========================
+# 9. Final table body
+# =========================
+table_body <- bind_rows(
+  n_row,
+  tibble(Variable = "", Placebo = "", Psilocybin = ""),
+  gender_block,
+  tibble(Variable = "", Placebo = "", Psilocybin = ""),
+  race_block,
+  tibble(Variable = "", Placebo = "", Psilocybin = ""),
+  ethnicity_block,
+  tibble(Variable = "", Placebo = "", Psilocybin = ""),
+  antidepressant_block,
+  tibble(Variable = "", Placebo = "", Psilocybin = ""),
+  cont_rows
+)
+
+print(table_body, n = Inf)
+
+# =========================
+# 10. Build flextable
+# =========================
+ft <- flextable(table_body)
+
+ft <- add_header_row(
+  ft,
+  values = c("", "Condition"),
+  colwidths = c(1, 2)
+)
+
+ft <- set_header_labels(
+  ft,
+  Variable = "",
+  Placebo = "Placebo",
+  Psilocybin = "Psilocybin"
+)
+
+ft <- merge_h(ft, part = "header")
+
+ft <- ft %>%
+  border_remove() %>%
+  font(fontname = "Times New Roman", part = "all") %>%
+  fontsize(size = 12, part = "all") %>%
+  align(j = 1, align = "left", part = "all") %>%
+  align(j = 2:3, align = "center", part = "all") %>%
+  valign(valign = "center", part = "all") %>%
+  padding(padding = 3, part = "all") %>%
+  line_spacing(space = 1.0, part = "all")
+
+ft <- bold(ft, part = "header", bold = TRUE)
+
+section_rows <- which(table_body$Variable %in% c(
+  "Gender",
+  "Race",
+  "Ethnicity",
+  "Maintained on Antidepressants"
+))
+
+ft <- bold(ft, i = section_rows, j = 1, bold = TRUE, part = "body")
+
+ft <- hline_top(
+  ft,
+  part = "header",
+  border = fp_border(color = "black", width = 1)
+)
+
+ft <- hline(
+  ft,
+  i = 2,
+  part = "header",
+  border = fp_border(color = "black", width = 1)
+)
+
+ft <- hline_bottom(
+  ft,
+  part = "body",
+  border = fp_border(color = "black", width = 1)
+)
+
+ft <- width(ft, j = 1, width = 3.8)
+ft <- width(ft, j = 2, width = 1.3)
+ft <- width(ft, j = 3, width = 1.3)
+
+ft <- height_all(ft, height = 0.23)
+
+# =========================
+# 11. Export to Word
+# =========================
+output_path <- "/Users/zsayali1/Documents/2004 Analysis/Table1.docx"
+
+doc <- read_docx() %>%
+  body_add_flextable(ft)
+
+print(doc, target = output_path)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
