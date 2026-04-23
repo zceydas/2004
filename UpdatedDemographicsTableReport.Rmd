@@ -18,7 +18,7 @@ library(rlang)
 # 1. Read data
 # =========================
 df <- read.csv(
-  "/Users/zsayali1/Documents/2004 Analysis/MDDAUD-Antidepressants_DATA_Updated.csv",
+  "/Users/zsayali1/Documents/2004 Analysis/UpdatedBook.csv",
   stringsAsFactors = FALSE,
   na.strings = c("", "NA", "N/A", ".", "--")
 )
@@ -30,14 +30,50 @@ df <- df %>%
 # =========================
 df <- df %>%
   mutate(
-    Drug = factor(Drug, levels = c("Placebo", "Psilocybin")),
+    # Drug: 1 = Placebo, 2 = Psilocybin
+    Drug = factor(Drug,
+                  levels = c(1, 2),
+                  labels = c("Placebo", "Psilocybin")),
 
-    Gender = factor(Gender, levels = c("Male", "Female", "Transgender")),
-    Race = factor(Race, levels = c("White", "Black", "Asian", "Indian")),
+    # Gender (unchanged)
+        # Race (numeric → labeled factor)
+    Gender = factor(Gender,
+                  levels = c(1, 2, 3),
+                  labels = c(
+                    "Male",
+                    "Female",
+                    "Transgender"
+                  )),
+    
+    Severity = factor(Severity,
+                    levels = c("Mild", "Moderate", "Severe")),
 
-    Antidepressant = factor(Antidepressant, levels = c(0, 1), labels = c("No", "Yes")),
-    Hispanic = factor(Hispanic, levels = c(0, 1), labels = c("No", "Yes")),
 
+    # Race (numeric → labeled factor)
+    Race = factor(Race,
+                  levels = c(1, 2, 3, 4, 5, 6, 7, 8),
+                  labels = c(
+                    "White",
+                    "Black",
+                    "Asian",
+                    "Indian",
+                    "Native Hawaiian or Other Pacific Islander",
+                    "Mixed",
+                    "Unknown",
+                    "Other"
+                  )),
+
+    # Antidepressant (unchanged)
+    Antidepressant = factor(Antidepressant,
+                            levels = c(0, 1),
+                            labels = c("No", "Yes")),
+
+    # Hispanic (unchanged)
+    Hispanic = factor(Hispanic,
+                      levels = c(0, 1),
+                      labels = c("No", "Yes")),
+
+    # Continuous variables
     Age = as.numeric(Age),
     TLFB = as.numeric(TLFB),
     GRID = as.numeric(GRID),
@@ -45,7 +81,6 @@ df <- df %>%
     DrinksPerHeavy = as.numeric(DrinksPerHeavy),
     Abstinent = as.numeric(Abstinent)
   )
-
 # =========================
 # 3. Helper functions
 # =========================
@@ -122,6 +157,7 @@ race_block <- make_cat_block(
   n_lookup = n_by_group
 )
 
+
 # Ethnicity section: only show Hispanic row
 ethnicity_counts <- expand_grid(
   Drug = levels(df$Drug),
@@ -145,6 +181,19 @@ ethnicity_block <- bind_rows(
   ethnicity_counts
 )
 
+sever_block <- make_cat_block(
+  data = df,
+  var = "Severity",
+  levels_vec = c("Mild", "Moderate", "Severe"),
+  row_labels = c(
+    "    Mild",
+    "    Moderate",
+    "    Severe"
+  ),
+  section_name = "AUD Severity",
+  n_lookup = n_by_group
+)
+
 antidepressant_block <- make_cat_block(
   data = df,
   var = "Antidepressant",
@@ -166,17 +215,17 @@ n_row <- n_by_group %>%
 # =========================
 cont_rows <- df %>%
   mutate(
-    pct_abstinent_90 = (Abstinent / 90) * 100,
-    pct_heavy_drinking_90 = (TLFB / 90) * 100
+    pct_abstinent = ifelse(!is.na(Total) & Total > 0, (Abstinent / Total) * 100, NA_real_),
+    pct_heavy_drinking = ifelse(!is.na(Total) & Total > 0, (TLFB / Total) * 100, NA_real_)
   ) %>%
   group_by(Drug) %>%
   summarise(
     `Age, mean (SD)` = fmt_mean_sd(Age),
     `GRID-HAMD, mean (SD)` = fmt_mean_sd(GRID),
-    `% days abstinent of previous 90 days` = fmt_mean_sd(pct_abstinent_90),
-    `% heavy drinking days of previous 90 days` = fmt_mean_sd(pct_heavy_drinking_90),
-    `Average no. of drinks per regular (non-heavy) drinking day over last 90 days` = fmt_mean_sd(DrinksPerDay),
-    `Average no. of drinks per heavy drinking day over last 90 days` = fmt_mean_sd(DrinksPerHeavy),
+    `% days abstinent` = fmt_mean_sd(pct_abstinent),
+    `% heavy drinking days` = fmt_mean_sd(pct_heavy_drinking),
+    `Average no. of drinks per regular (non-heavy) drinking day` = fmt_mean_sd(DrinksPerDay),
+    `Average no. of drinks per heavy drinking day` = fmt_mean_sd(DrinksPerHeavy),
     .groups = "drop"
   ) %>%
   pivot_longer(cols = -Drug, names_to = "Variable", values_to = "value") %>%
@@ -193,6 +242,8 @@ table_body <- bind_rows(
   race_block,
   tibble(Variable = "", Placebo = "", Psilocybin = ""),
   ethnicity_block,
+  tibble(Variable = "", Placebo = "", Psilocybin = ""),
+  sever_block,
   tibble(Variable = "", Placebo = "", Psilocybin = ""),
   antidepressant_block,
   tibble(Variable = "", Placebo = "", Psilocybin = ""),
@@ -237,6 +288,7 @@ section_rows <- which(table_body$Variable %in% c(
   "Gender",
   "Race",
   "Ethnicity",
+  "AUD Severity",
   "Maintained on Antidepressants"
 ))
 
